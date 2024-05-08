@@ -1,36 +1,53 @@
 <template>
-  <section class="edge-grid h-[1200px] w-[1800px] bg-zinc-200 p-10" :style="{ gridTemplateAreas }">
-    <div v-for="n in gridAreaNames" :key="n" :style="{ gridArea: n }">{{ n }}</div>
-  </section>
+  <main ref="container" class="h-full w-full overflow-auto">
+    <section
+      class="edge-grid bg-zinc-200"
+      :style="{
+        gridTemplateAreas,
+        width: baseWH * sum(wTList) + 'px',
+        height: gridAreaList.length * baseWH + 'px',
+        opacity: arrivedState.bottom && y !== 0 ? 0 : 1,
+      }"
+    >
+      <div v-for="n in allGridAreaNames" :key="n" :style="{ gridArea: n }" class="edge-block">
+        {{ n }}
+      </div>
+    </section>
+  </main>
 </template>
 <script setup lang="ts">
-import { random } from 'radash';
+import { random, sum, debounce } from 'radash';
 interface blockType {
   width: number;
   height: number;
 }
-// 图片长宽比 = 3:2
-const ratio = 2 / 3;
-//第一次请求
-const t = 1;
-// 一次出10个
+const container = ref<HTMLDivElement | null>(null);
+const { arrivedState, y } = useScroll(container);
+// base-w-h
+const baseWH = 90;
+// 单次请求数
 const count = 10;
-// 最大允许 1个3x3 + 1个3x2 + 1个3x1 共 18个 块宽度
-const wTList = [3, 6, 9];
-const hTList = wTList.map((w) => w * ratio);
+// block宽长比
+const ratio = 2 / 3;
+// gap
+const gap = 3;
+// block类型数
+const bt = 3;
 const continueRow = ref(0);
-const maxWidth = wTList.reduce((p, c) => p + c, 0);
-const gridAreaNames = ref<string[]>(Array.from({ length: count }, (_, i) => `ar_${t}_${i}`));
-const generatedArea = [Array.from({ length: maxWidth }, () => '.')];
+const wTList = Array.from({ length: bt }, (_, i) => gap * (i + 1));
+const hTList = wTList.map((w) => w * ratio);
+const totalWidth = sum(wTList);
+const allGridAreaNames = ref<string[]>([]);
+const gridAreaList = [Array.from({ length: totalWidth }, () => '.')];
 //获取一行中的连续空白长度 [startColumn, endColumn][];
-const getEmptyWidth = async (row: number) => {
-  if (row >= generatedArea.length) {
-    generatedArea.push(Array.from({ length: maxWidth }, () => '.'));
-    return [[0, maxWidth - 1]] as [number, number][];
+const getEmptyWidth = (row: number) => {
+  if (row >= gridAreaList.length) {
+    gridAreaList.push(Array.from({ length: totalWidth }, () => '.'));
+    return [[0, totalWidth - 1]] as [number, number][];
   }
   const ew: [number, number][] = [];
   let ring = false;
-  generatedArea[row].forEach((item, index) => {
+  gridAreaList[row].forEach((item, index) => {
     if (!ring && item !== '.') {
       ring = false;
     } else if (!ring && item === '.') {
@@ -39,11 +56,10 @@ const getEmptyWidth = async (row: number) => {
     } else if (ring && item !== '.') {
       ew[ew.length - 1][1] = index - 1;
       ring = false;
-    } else if (ring && index === maxWidth - 1) {
+    } else if (ring && index === totalWidth - 1) {
       ew[ew.length - 1][1] = index;
     }
   });
-  await new Promise((resolve) => setTimeout(resolve));
   return ew;
 };
 //根据空白长度生成块类型
@@ -59,66 +75,73 @@ const fillingByEmptyWidth = (emptyWidth: [number, number]) => {
   return blocks;
 };
 //根据块类型生成grid模板区域
-const getGridTemplateArea = (
+const generateGridTemplateArea = (
   row: number,
-  col: [number, number],
+  startCol: number,
   blocks: blockType[],
   names: string[],
 ) => {
-  let startCol = col[0];
   blocks.forEach((bk) => {
     const name = names.shift();
     if (!name) return;
     for (let r = row; r < row + bk.height; r++) {
       for (let c = startCol; c < startCol + bk.width; c++) {
-        if (!generatedArea[r]) {
-          generatedArea.push(Array.from({ length: maxWidth }, () => '.'));
+        if (!gridAreaList[r]) {
+          gridAreaList.push(Array.from({ length: totalWidth }, () => '.'));
         }
-        generatedArea[r][c] = name;
+        gridAreaList[r][c] = name;
       }
     }
     startCol += bk.width;
   });
 };
 //生成函数
-const handleGenerating = async () => {
+const handleGenerating = (gridAreaNames: string[]) => {
   let row = continueRow.value;
-  const curGeneratedName = [...gridAreaNames.value];
-  while (curGeneratedName.length) {
-    const emptyWidth = await getEmptyWidth(row);
+  while (gridAreaNames.length) {
+    const emptyWidth = getEmptyWidth(row);
     if (!emptyWidth.length) {
       row++;
       continue;
     }
     emptyWidth.forEach((col) => {
       const blocks = fillingByEmptyWidth(col);
-      getGridTemplateArea(row, col, blocks, curGeneratedName);
+      generateGridTemplateArea(row, col[0], blocks, gridAreaNames);
     });
   }
   continueRow.value = row;
-  await new Promise((resolve) => setTimeout(resolve));
-};
-const getGridTemplateAreas = async () => {
-  await handleGenerating();
-  const res = generatedArea
+  return gridAreaList
     .map((row) => row.join(' '))
     .map((r) => "'" + r + "'")
     .join(' ');
-  gridTemplateAreas.value = res;
 };
+const getGridTemplateAreaStyle = debounce({ delay: 300 }, () => {
+  t++;
+  const gridAreaNames = Array.from({ length: count }, (_, i) => `_${t}_${i}`);
+  allGridAreaNames.value.push(...gridAreaNames);
+  gridTemplateAreas.value = handleGenerating(gridAreaNames);
+});
 const gridTemplateAreas = ref();
-getGridTemplateAreas();
+//附加参数
+let t = 0;
+whenever(() => arrivedState.bottom, getGridTemplateAreaStyle);
 </script>
 <style scoped lang="scss">
 .edge-grid {
   display: grid;
   gap: 4px;
+  padding: 40px;
   grid-template-rows: repeat(auto-fill, 1fr);
   grid-auto-flow: row dense;
+  transition: all 200ms ease-in-out;
 }
-.edge-grid > * {
+.edge-block {
+  transition: background-color 0.55s;
   border: 1px solid #000;
   background-color: lightgray;
   padding: 4px;
+  &:hover {
+    background-color: #cfdaf3;
+  }
 }
 </style>
